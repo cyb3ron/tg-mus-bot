@@ -4,11 +4,26 @@ import random
 import logging
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
+from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
+# === Настройки ===
 TOKEN = os.getenv("TOKEN")
+if not TOKEN:
+    raise RuntimeError("TOKEN env var is not set")
+
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # например: https://tg-mus-bot.onrender.com
+if not WEBHOOK_HOST:
+    raise RuntimeError("WEBHOOK_HOST env var is not set")
+
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = WEBHOOK_HOST + WEBHOOK_PATH
+
+WEBAPP_HOST = "0.0.0.0"
+WEBAPP_PORT = int(os.getenv("PORT", 8000))  # Render передаёт PORT
+
+# === Бот и диспетчер ===
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 
@@ -25,32 +40,11 @@ CREATE TABLE IF NOT EXISTS albums (
 """)
 db.commit()
 
-# какие команды есть и какому жанру в базе они соответствуют
-GENRES = {
-    # старые
-    "techno": "techno",
-    "house": "house",
-    "ambient": "ambient",
-    "idm": "idm",
-    "ebm": "ebm",
-    "dark": "dark",
-
-    # новые
-    "dubstep": "dubstep",
-    "darkjungle": "dark jungle",
-    "jungle": "jungle",
-    "breakcore": "breakcore",
-    "tederfm": "tederfm",
-    "afrohouse": "afro house",
-    "dubtechno": "dub techno",
-    "dub": "dub",
-}
-
-# для каждого юзера запоминаем, в какой жанр он сейчас добавляет треки
+# Запоминаем, в какой жанр юзер сейчас добавляет треки
 user_genre = {}  # {user_id: "techno"}
 
 
-# ===== Команда /add =====
+# ===== /add =====
 @dp.message_handler(commands=["add"])
 async def add_start(msg: types.Message):
     args = msg.get_args()
@@ -58,7 +52,6 @@ async def add_start(msg: types.Message):
         await msg.reply("Use: /add techno")
         return
 
-    # что напишешь после /add — так и запишется в жанр
     genre = args.strip().lower()
     user_genre[msg.from_user.id] = genre
     await msg.reply(f"Ok. Send me an audio and I'll place it into genre: {genre}")
@@ -84,17 +77,13 @@ async def add_audio(a_msg: types.Message):
 
 
 # ===== Выбор случайного трека по жанру =====
-@dp.message_handler(commands=list(GENRES.keys()))
+@dp.message_handler(commands=[
+    "techno", "house", "ambient", "idm", "ebm", "dark",
+    "dubstep", "darkjungle", "jungle", "breakcore",
+    "tederfm", "afrohouse", "dubtechno", "dub"
+])
 async def send_random(msg: types.Message):
-    # имя команды без / и параметров
-    # пример: "/dubtechno" -> "dubtechno"
-    command = msg.text.split()[0][1:].lower()
-
-    genre = GENRES.get(command)
-    if not genre:
-        await msg.reply("Unknown genre command 🤔")
-        return
-
+    genre = msg.text.replace("/", "").lower()
     cursor.execute("SELECT file_id FROM albums WHERE genre=?", (genre,))
     rows = cursor.fetchall()
 
@@ -109,17 +98,60 @@ async def send_random(msg: types.Message):
 # ===== /start =====
 @dp.message_handler(commands=["start"])
 async def start(msg: types.Message):
-    commands_list = "\n".join(
-        f"/{cmd}  →  {genre}" for cmd, genre in GENRES.items()
-    )
-
     await msg.reply(
         "Great. Commands:\n"
-        "/add genre  (example: /add techno)\n\n"
-        "Play by genre:\n"
-        f"{commands_list}"
+        "/add genre\n"
+        "/techno\n"
+        "/house\n"
+        "/ambient\n"
+        "/idm\n"
+        "/ebm\n"
+        "/dark\n"
+        "/dubstep\n"
+        "/darkjungle\n"
+        "/jungle\n"
+        "/breakcore\n"
+        "/tederfm\n"
+        "/afrohouse\n"
+        "/dubtechno\n"
+        "/dub"
     )
+
+
+# ===== Webhook-хендлер для Telegram =====
+async def handle_webhook(request: web.Request):
+    data = await request.json()
+    update = types.Update(**data)
+    await dp.process_update(update)
+    return web.Response()
+
+
+# ===== Хуки старта/остановки aiohttp-приложения =====
+async def on_startup(app: web.Application):
+    # Сначала удаляем старый webhook (если был), потом ставим новый
+    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"Webhook set to {WEBHOOK_URL}")
+
+
+async def on_shutdown(app: web.Application):
+    await bot.delete_webhook()
+    db.close()
+    await bot.session.close()
+    logging.info("Bot shutdown completed")
+
+
+def main():
+    app = web.Application()
+    # Роут, куда Telegram будет слать апдейты
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+
+    web.run_app(app, host=WEBAPP_HOST, port=WEBAPP_PORT)
 
 
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    main()
+
