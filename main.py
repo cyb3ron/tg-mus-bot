@@ -15,6 +15,8 @@ if not TOKEN:
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
+Bot.set_current(bot)
+Dispatcher.set_current(dp)
 
 # === База данных ===
 db = sqlite3.connect("music.db")
@@ -138,3 +140,4 @@ if __name__ == "__main__":
         host=WEBAPP_HOST,
         port=WEBAPP_PORT,
     )
+
