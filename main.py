@@ -1,11 +1,39 @@
 import sqlite3
 import random
 import logging
+import os
+import threading  # <<< добавили
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
-import os
 
 logging.basicConfig(level=logging.INFO)
+
+# ---------- HTTP-заглушка для Render ----------
+
+def run_dummy_http_server():
+    """
+    Простейший HTTP-сервер, чтобы Render видел открытый порт
+    и не вырубил наш процесс из-за отсутствия трафика.
+    """
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"Bot is running")
+
+        # убираем лишний лог в консоль
+        def log_message(self, format, *args):
+            return
+
+    port = int(os.environ.get("PORT", "10000"))
+    httpd = HTTPServer(("0.0.0.0", port), Handler)
+    httpd.serve_forever()
+
+# ---------- Telegram-бот ----------
 
 TOKEN = os.getenv("TOKEN")
 
@@ -60,5 +88,8 @@ async def start(msg: types.Message):
     await msg.reply("Great. Commands:\n/add genre\n/techno\n/house\n/ambient\n/idm\n/ebm\n/dark")
 
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    # запускаем HTTP-сервер в отдельном потоке, чтобы Render видел порт
+    threading.Thread(target=run_dummy_http_server, daemon=True).start()
 
+    # запускаем Telegram-бота
+    executor.start_polling(dp, skip_updates=True)
