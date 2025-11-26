@@ -25,6 +25,27 @@ CREATE TABLE IF NOT EXISTS albums (
 """)
 db.commit()
 
+# какие команды есть и какому жанру в базе они соответствуют
+GENRES = {
+    # старые
+    "techno": "techno",
+    "house": "house",
+    "ambient": "ambient",
+    "idm": "idm",
+    "ebm": "ebm",
+    "dark": "dark",
+
+    # новые
+    "dubstep": "dubstep",
+    "darkjungle": "dark jungle",
+    "jungle": "jungle",
+    "breakcore": "breakcore",
+    "tederfm": "tederfm",
+    "afrohouse": "afro house",
+    "dubtechno": "dub techno",
+    "dub": "dub",
+}
+
 # для каждого юзера запоминаем, в какой жанр он сейчас добавляет треки
 user_genre = {}  # {user_id: "techno"}
 
@@ -37,6 +58,7 @@ async def add_start(msg: types.Message):
         await msg.reply("Use: /add techno")
         return
 
+    # что напишешь после /add — так и запишется в жанр
     genre = args.strip().lower()
     user_genre[msg.from_user.id] = genre
     await msg.reply(f"Ok. Send me an audio and I'll place it into genre: {genre}")
@@ -62,9 +84,17 @@ async def add_audio(a_msg: types.Message):
 
 
 # ===== Выбор случайного трека по жанру =====
-@dp.message_handler(commands=["techno", "house", "ambient", "idm", "ebm", "dark"])
+@dp.message_handler(commands=list(GENRES.keys()))
 async def send_random(msg: types.Message):
-    genre = msg.text.replace("/", "").lower()
+    # имя команды без / и параметров
+    # пример: "/dubtechno" -> "dubtechno"
+    command = msg.text.split()[0][1:].lower()
+
+    genre = GENRES.get(command)
+    if not genre:
+        await msg.reply("Unknown genre command 🤔")
+        return
+
     cursor.execute("SELECT file_id FROM albums WHERE genre=?", (genre,))
     rows = cursor.fetchall()
 
@@ -79,15 +109,15 @@ async def send_random(msg: types.Message):
 # ===== /start =====
 @dp.message_handler(commands=["start"])
 async def start(msg: types.Message):
+    commands_list = "\n".join(
+        f"/{cmd}  →  {genre}" for cmd, genre in GENRES.items()
+    )
+
     await msg.reply(
         "Great. Commands:\n"
-        "/add genre\n"
-        "/techno\n"
-        "/house\n"
-        "/ambient\n"
-        "/idm\n"
-        "/ebm\n"
-        "/dark"
+        "/add genre  (example: /add techno)\n\n"
+        "Play by genre:\n"
+        f"{commands_list}"
     )
 
 
