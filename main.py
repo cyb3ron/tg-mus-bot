@@ -3,22 +3,35 @@ import sqlite3
 import random
 import logging
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils.executor import start_webhook
 
 logging.basicConfig(level=logging.INFO)
 
-# === TOKEN ===
+# === НАСТРОЙКИ ===
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
-    raise RuntimeError("No TOKEN env var set")
+    raise RuntimeError("Environment variable TOKEN is not set")
 
+# адрес твоего сервиса на Render
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "https://tg-mus-bot-gfix.onrender.com")
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+WEBAPP_HOST = "0.0.0.0"
+WEBAPP_PORT = int(os.getenv("PORT", "8000"))  # Render сам подставит PORT
+
+
+# === БОТ И ДИСПЕТЧЕР ===
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
+
+# ВАЖНО: фикс для aiogram в webhook-режиме
 Bot.set_current(bot)
 Dispatcher.set_current(dp)
 
-# === База данных ===
+
+# === БАЗА ДАННЫХ ===
 db = sqlite3.connect("music.db")
 cursor = db.cursor()
 
@@ -31,29 +44,50 @@ CREATE TABLE IF NOT EXISTS albums (
 """)
 db.commit()
 
-# для каждого юзера запоминаем, в какой жанр он сейчас добавляет треки
+# запоминаем, в какой жанр пользователь сейчас кидает треки
 user_genre = {}  # {user_id: "techno"}
 
-# ===== Команда /add =====
+
+# === ЖАНРЫ И КОМАНДЫ ===
+GENRE_COMMANDS = {
+    "techno": "techno",
+    "house": "house",
+    "ambient": "ambient",
+    "idm": "idm",
+    "ebm": "ebm",
+    "dark": "dark",
+    "dubstep": "dubstep",
+    "darkjungle": "dark jungle",
+    "jungle": "jungle",
+    "breakcore": "breakcore",
+    "tederfm": "tederfm",
+    "afrohouse": "afro house",
+    "dubtechno": "dub techno",
+    "dub": "dub",
+}
+
+
+# ====== /add ======
 @dp.message_handler(commands=["add"])
 async def add_start(msg: types.Message):
     args = msg.get_args()
     if not args:
-        await msg.reply("Use: /add techno")
+        await msg.reply("Use: /add genre\nНапример: /add techno")
         return
 
     genre = args.strip().lower()
     user_genre[msg.from_user.id] = genre
-    await msg.reply(f"Ok. Send me an audio and I'll place it into genre: {genre}")
+    await msg.reply(f"Ок. Жду аудио, сохраню в жанр: {genre}")
 
-# ===== Приём аудио после /add =====
+
+# ====== Приём аудио после /add ======
 @dp.message_handler(content_types=["audio"])
 async def add_audio(a_msg: types.Message):
     user_id = a_msg.from_user.id
     genre = user_genre.get(user_id)
 
     if not genre:
-        await a_msg.reply("First choose genre with /add genre (for example /add techno)")
+        await a_msg.reply("Сначала выбери жанр командой /add genre\nНапример: /add techno")
         return
 
     file_id = a_msg.audio.file_id
@@ -62,82 +96,76 @@ async def add_audio(a_msg: types.Message):
         (genre, file_id),
     )
     db.commit()
-    await a_msg.reply(f"Added to {genre} 🔥")
+    await a_msg.reply(f"Добавил в {genre} 🔥")
 
-# Список жанров, которые бот умеет
-GENRES = [
-    "techno",
-    "house",
-    "ambient",
-    "idm",
-    "ebm",
-    "dark",
-    "dubstep",
-    "darkjungle",
-    "jungle",
-    "breakcore",
-    "tederfm",
-    "afrohouse",
-    "dubtechno",
-    "dub",
-]
 
-# ===== Выбор случайного трека по жанру =====
-@dp.message_handler(commands=GENRES)
+# ====== Выбор случайного трека по жанру ======
+@dp.message_handler(commands=list(GENRE_COMMANDS.keys()))
 async def send_random(msg: types.Message):
-    genre = msg.text.replace("/", "").lower()
-    cursor.execute("SELECT file_id FROM albums WHERE genre=?", (genre,))
+    cmd = msg.text.split()[0].lstrip("/").lower()
+    genre = GENRE_COMMANDS.get(cmd, cmd)
+
+    cursor.execute("SELECT file_id FROM albums WHERE genre = ?", (genre,))
     rows = cursor.fetchall()
 
     if not rows:
-        await msg.reply(f"No albums in genre {genre}")
+        await msg.reply(f"В жанре {genre} ещё ничего нет")
         return
 
     file_id = random.choice(rows)[0]
     await msg.answer_audio(file_id)
 
-# ===== /start =====
+
+# ====== /start ======
 @dp.message_handler(commands=["start"])
 async def start(msg: types.Message):
-    cmds = "\n".join(f"/{g}" for g in GENRES)
+    commands_text = "\n".join(
+        f"/{cmd}" for cmd in GENRE_COMMANDS.keys()
+    )
     await msg.reply(
-        "Great. Commands:\n"
-        "/add genre\n"
-        f"{cmds}"
+        "Yo. Команды:\n"
+        "/add genre  — добавить трек в жанр (пример: /add techno)\n\n"
+        "Жанры:\n"
+        f"{commands_text}"
     )
 
-# ========== WEBHOOK CONFIG ==========
-WEBHOOK_HOST = "https://tg-mus-bot-gfix.onrender.com"
-WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = WEBHOOK_HOST + WEBHOOK_PATH
 
-WEBAPP_HOST = "0.0.0.0"
-port_env = os.getenv("PORT")
-try:
-    WEBAPP_PORT = int(port_env) if port_env not in (None, "") else 8000
-except ValueError:
-    WEBAPP_PORT = 8000
+# ========= AIOHTTP (WEBHOOK) =========
 
-async def on_startup(dp: Dispatcher):
-    # Удаляем старый webhook (если был) и ставим новый
-    await bot.delete_webhook(drop_pending_updates=True)
-    await bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"Webhook set to {WEBHOOK_URL}")
+async def handle_root(request: web.Request):
+    # просто 404, чтобы Render был доволен
+    return web.Response(text="Not found", status=404)
 
-async def on_shutdown(dp: Dispatcher):
-    logging.info("Shutting down..")
+
+async def handle_webhook(request: web.Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return web.Response(text="bad request", status=400)
+
+    update = types.Update(**data)
+    logging.info("Got update: %s", update)
+
+    await dp.process_update(update)
+    return web.Response(text="ok", status=200)
+
+
+async def on_startup(app: web.Application):
+    # снимаем старый вебхук на всякий случай
     await bot.delete_webhook()
-    db.close()
-    await bot.session.close()
-    logging.info("Bye!")
+    # ставим новый
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info("Webhook set to %s", WEBHOOK_URL)
+
+
+def create_app() -> web.Application:
+    app = web.Application()
+    app.router.add_get("/", handle_root)
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.on_startup.append(on_startup)
+    return app
+
 
 if __name__ == "__main__":
-    start_webhook(
-        dispatcher=dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        host=WEBAPP_HOST,
-        port=WEBAPP_PORT,
-    )
-
+    app = create_app()
+    web.run_app(app, host=WEBAPP_HOST, port=WEBAPP_PORT)
