@@ -32,17 +32,23 @@ Dispatcher.set_current(dp)
 
 
 # === БАЗА ДАННЫХ ===
-db = sqlite3.connect("music.db")
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+db = psycopg2.connect(DATABASE_URL, sslmode="require", cursor_factory=RealDictCursor)
 cursor = db.cursor()
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS albums (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     genre TEXT,
     file_id TEXT
-)
+);
 """)
 db.commit()
+
 
 # запоминаем, в какой жанр пользователь сейчас кидает треки
 user_genre = {}  # {user_id: "techno"}
@@ -112,7 +118,7 @@ async def send_random(msg: types.Message):
         await msg.reply(f"В жанре {genre} ещё ничего нет")
         return
 
-    file_id = random.choice(rows)[0]
+    file_id = random.choice(rows)["file_id"]
     await msg.answer_audio(file_id)
 
 
@@ -169,3 +175,4 @@ def create_app() -> web.Application:
 if __name__ == "__main__":
     app = create_app()
     web.run_app(app, host=WEBAPP_HOST, port=WEBAPP_PORT)
+
