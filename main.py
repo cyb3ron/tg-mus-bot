@@ -98,7 +98,7 @@ async def add_audio(a_msg: types.Message):
 
     file_id = a_msg.audio.file_id
     cursor.execute(
-        "INSERT INTO albums (genre, file_id) VALUES (?, ?)",
+        "INSERT INTO albums (genre, file_id) VALUES (%s, %s)",
         (genre, file_id),
     )
     db.commit()
@@ -111,7 +111,7 @@ async def send_random(msg: types.Message):
     cmd = msg.text.split()[0].lstrip("/").lower()
     genre = GENRE_COMMANDS.get(cmd, cmd)
 
-    cursor.execute("SELECT file_id FROM albums WHERE genre = ?", (genre,))
+    cursor.execute("SELECT file_id FROM albums WHERE genre = %s", (genre,))
     rows = cursor.fetchall()
 
     if not rows:
@@ -175,4 +175,5 @@ def create_app() -> web.Application:
 if __name__ == "__main__":
     app = create_app()
     web.run_app(app, host=WEBAPP_HOST, port=WEBAPP_PORT)
+
 
